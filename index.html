@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FIRECTOR — Worldwide Fire Intelligence</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--cream:#f3efe6;--paper:#fffcf6;--edge:#ded9cd;--ink:#262d28;--muted:#777d74;--olive:#536a54;--red:#b35f43}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--cream);color:var(--ink)}
+header{padding:17px 26px;background:var(--paper);border-bottom:1px solid var(--edge);display:flex;align-items:center;justify-content:space-between;gap:14px}.brand{font-size:23px;letter-spacing:-1px;font-weight:850}.brand b{color:var(--red)}.eyebrow{font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase}.pill{background:#e8ebe4;color:#536a54;padding:8px 11px;border-radius:20px;font-size:11px;font-weight:700}
+.layout{display:grid;grid-template-columns:270px minmax(0,1fr) 255px;min-height:calc(100vh - 76px)}aside{background:var(--paper);padding:24px;border-right:1px solid var(--edge)}aside.right{border-left:1px solid var(--edge);border-right:none}main{padding:24px;min-width:0}h1{font-size:28px;letter-spacing:-.6px;margin:5px 0}h2{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:26px 0 12px}.hint,.small{font-size:12px;color:var(--muted);line-height:1.6}.source{padding:12px 0;border-bottom:1px solid var(--edge);display:flex;justify-content:space-between;gap:8px}.source strong{font-size:14px}.tag{font-size:10px;background:#efeee8;padding:4px 7px;border-radius:4px;color:var(--muted)}.tag.ok{color:var(--olive);background:#e5eade}button{border:0;border-radius:7px;background:var(--olive);padding:12px;color:white;font:inherit;font-weight:650;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.full{width:100%;margin-top:11px}.secondary{background:transparent;border:1px solid var(--edge);color:var(--ink)}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0}.metric,.map-box,.details{border:1px solid var(--edge);background:var(--paper);border-radius:11px}.metric{padding:15px}.metric small{display:block;color:var(--muted);font-size:11px}.metric strong{display:block;font-size:25px;margin-top:6px}.map-box{padding:10px}#map{height:65vh;min-height:460px;border-radius:7px;z-index:0}.mapbar{display:flex;justify-content:space-between;gap:12px;padding:6px 8px 12px;color:var(--muted);font-size:12px}.details{padding:15px;margin-top:14px}.details strong{display:block;margin-bottom:7px}.details p{font-size:12px;color:var(--muted);margin:5px 0}.status{font-size:12px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}.error{color:#a84231}.line{border-top:1px solid var(--edge);margin:17px 0}.data{font-variant-numeric:tabular-nums}.leaflet-popup-content{font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+@media(max-width:1150px){.layout{grid-template-columns:235px minmax(0,1fr)}aside.right{grid-column:1/-1;border-top:1px solid var(--edge)}}@media(max-width:700px){.layout{display:block}header{padding:13px}main{padding:14px}.metrics{grid-template-columns:repeat(2,1fr)}aside{padding:16px}#map{height:53vh;min-height:340px}}
+.byline{font-size:10px;font-weight:700;letter-spacing:2.2px;color:#536a54;margin-top:-2px;margin-bottom:4px;text-transform:uppercase}</style></head><body>
+<header><div><div class="brand"><b>FIRE</b>CTOR</div><div class="byline">by ASTROARMONIA</div><div class="eyebrow">Worldwide fire observation network</div></div><div class="pill" id="headerStatus">SATELLITE OBSERVATIONS</div></header>
+<div class="layout"><aside><div class="eyebrow">Data Sources</div>
+<div class="source"><strong>VIIRS</strong><span class="tag" id="viirsStatus">Checking</span></div>
+<div class="source"><strong>MODIS</strong><span class="tag" id="modisStatus">Checking</span></div>
+<div class="source"><strong>Sentinel-2</strong><span class="tag ok">Catalogue</span></div>
+<div class="source"><strong>Meteosat MSG</strong><span class="tag" id="msgStatus">Checking WMS</span></div>
+<h2>Data Control</h2><button class="full" id="refreshBtn">Refresh observations</button><button class="secondary full" id="locBtn">Use my location</button><button class="secondary full" id="worldBtn">View whole world</button>
+<p class="hint">FIRECTOR checks for updated NASA data every 5 minutes. Satellite observations may arrive hours after acquisition.</p>
+<h2>Data quality</h2><div class="status" id="qualityStatus">Not evaluated</div><h2>Source Status</h2><div class="status" id="status">Preparing first request…</div>
+<h2>Fire Fusion v6 <span class="tag ok" id="fusionState">AUTO · STARTING</span></h2><p class="hint">Automatic candidate grouping starts when the dashboard opens and re-runs after each successful NASA refresh. Fusion uses reported NASA pixel dimensions and observation times, with a capped group diameter and safeguards against chaining separate hotspots. Ambiguous observations remain separate. Sentinel-2 and Meteosat imagery are for additional review and do not automatically approve grouping. Event counts are not confirmed fire counts.</p>
+<h2>Independent imagery review</h2><p class="hint">Sentinel-2 and Meteosat are supporting evidence only. Neither catalogue records nor WMS imagery automatically prove that detections are duplicates.</p><label class="hint"><input id="msgOverlay" type="checkbox" disabled> Show Meteosat FRP overlay (visual)</label><p class="small"><a href="https://lsa-saf.eumetsat.int/en/data/map-service/" target="_blank" rel="noopener noreferrer">Official Meteosat fire map</a></p>
+</aside>
+<main><div class="eyebrow">Global Operations / Last 24 Hours — Research prototype, not emergency dispatch</div><h1>Latest fire observations</h1><div class="hint">Worldwide NASA FIRMS VIIRS + MODIS · Observations are not real-time emergency alerts</div>
+<div class="metrics"><div class="metric"><small>Raw observations</small><strong class="data" id="rawCount">—</strong></div><div class="metric"><small>Candidate events</small><strong class="data" id="eventCount">—</strong></div><div class="metric"><small>Observations grouped (estimated)</small><strong class="data" id="mergedCount">—</strong></div><div class="metric"><small>Last observed (UTC)</small><strong style="font-size:15px" id="latest">—</strong></div></div>
+<div class="map-box"><div class="mapbar"><span>Satellite detections · Zoom to separate clusters</span><span id="mapLabel">Loading</span></div><div id="map"></div></div>
+<div class="details"><strong id="detailTitle">Select a fire event</strong><p id="detailBody">Click a marker to inspect its contributing VIIRS and MODIS observations.</p><button class="secondary" id="sentinelBtn" disabled>Find Sentinel-2 imagery</button><div id="sentinelResults" class="small"></div><div class="line"></div><strong>Verification evidence</strong><p class="small">Inspect whether supporting data are available and recent enough to be useful. This is not an automatic duplicate confirmation.</p><button class="secondary" id="evidenceBtn" disabled>Check Sentinel-2 + Meteosat evidence</button><div id="evidenceResults" class="small" role="status" aria-live="polite"></div><p class="small" id="verificationState">Select an event to inspect supporting sources.</p><p class="small" id="msgEvidence">Meteosat WMS status is being checked.</p><p class="small"><b>Decision:</b> unverified candidate grouping. No automatic independent verification is implemented.</p></div>
+</main><aside class="right"><div class="eyebrow">Location Intelligence</div><h2>Your position</h2><div id="locationText" class="small">Location not shared</div><h2>Closest detected hotspot</h2><div id="distance" style="font-size:27px;font-weight:750">—</div><p class="hint" id="distanceHint">Allow location access to calculate the distance to the nearest candidate event in the last 24 hours.</p><div class="line"></div><h2>Feed health / audit</h2><div class="small" id="auditInfo">Awaiting first retrieval</div><h2>Latest refresh</h2><div class="small" id="retrieved">Not loaded</div><h2>Coverage</h2><p class="hint">Worldwide, rolling 24-hour window. Zooming out groups markers visually; zoom to level 11+ to see individual candidate events. Grouped map circles are not additional fire events.</p><p class="hint">Never use this prototype to decide whether an area is safe. Consult official emergency authorities.</p></aside></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const map=L.map('map',{worldCopyJump:true}).setView([15,0],2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+const markers=L.layerGroup().addTo(map), person=L.layerGroup().addTo(map);
+let selected=null,coords=null,revision=0,loading=false;
+function showUTC(value){return value?new Date(value).toISOString().slice(0,16).replace('T',' ')+' UTC':'—'}
+function fmt(n){return Number(n).toLocaleString()}
+function message(t,err=false){$('status').textContent=t;$('status').className=err?'status error':'status'}
+async function getJSON(url){const r=await fetch(url,{cache:'no-store'});let v;try{v=await r.json()}catch{throw Error('Unexpected server response')};if(!r.ok)throw Error(typeof v.detail==='string'?v.detail:JSON.stringify(v.detail||v));return v}
+async function loadSummary(){try{const d=await getJSON('/api/world/summary');$('rawCount').textContent=fmt(d.raw_count);$('eventCount').textContent=fmt(d.event_count);$('mergedCount').textContent=fmt(d.raw_count-d.event_count);$('latest').textContent=showUTC(d.latest_observation);$('retrieved').textContent=showUTC(d.retrieved_at);$('auditInfo').textContent='NASA fetch complete; aggregate audit available at /api/world/audit';$('viirsStatus').textContent=d.source_errors.VIIRS?'ERROR':'ONLINE';$('modisStatus').textContent=d.source_errors.MODIS?'ERROR':'ONLINE';$('viirsStatus').className=d.source_errors.VIIRS?'tag':'tag ok';$('modisStatus').className=d.source_errors.MODIS?'tag':'tag ok';message(Object.keys(d.source_errors).length?'Some feeds failed: '+JSON.stringify(d.source_errors):'Feeds loaded. Auto Fusion active — unvalidated; results not independently verified. Refresh every 5 minutes.');$('headerStatus').textContent='LAST 24 HOURS';$('fusionState').textContent='AUTO · ON';$('fusionState').className='tag ok';loadQuality();if(coords)nearest();return true}catch(e){message(e.message,true);$('headerStatus').textContent='DATA UNAVAILABLE';$('fusionState').textContent='AUTO · DATA ERROR';$('fusionState').className='tag';return false}}
+function safeText(s){const d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
+function chooseEvent(ev){selected=ev;$('detailTitle').textContent=(ev.ambiguous?'Ambiguous / kept separate · ':'Candidate group · ')+ev.count+' observation(s)';const pieces=ev.examples.map(o=>`${safeText(o.source)} — ${showUTC(o.datetime)} — ${o.lat.toFixed(4)}, ${o.lon.toFixed(4)}`);$('detailBody').innerHTML=`${safeText(ev.fusion_note||'Unverified candidate grouping')}<br>Sources: ${ev.sources.map(safeText).join(', ')}<br>Latest: ${showUTC(new Date(ev.latest*1000).toISOString())}<br><br>${pieces.join('<br>')}`;$('sentinelBtn').disabled=false;$('evidenceBtn').disabled=false;$('evidenceResults').textContent='Evidence has not been checked for this event.';$('sentinelResults').textContent=''}
+async function loadQuality(){try{const q=await getJSON('/api/world/quality');const age=q.latest_observation_age_minutes;const ageText=age===null?'none available':Math.max(0,age).toFixed(0)+' min old';$('qualityStatus').textContent='Feed: '+q.data_state+' | Latest observation: '+ageText+' | Ambiguous groups: '+q.ambiguous_groups+' | Exact source-row repeats removed: '+q.exact_repeated_source_rows_removed+' | Independent accuracy: NOT VALIDATED';$('auditInfo').textContent='Last retrieval: '+showUTC(q.retrieved_at)+' | Audit: /api/world/audit'}catch(e){$('qualityStatus').textContent='Quality check unavailable: '+e.message}}
+async function loadMap(){const rev=++revision;const b=map.getBounds();const q=new URLSearchParams({west:b.getWest().toFixed(4),south:b.getSouth().toFixed(4),east:b.getEast().toFixed(4),north:b.getNorth().toFixed(4),zoom:Math.round(map.getZoom())});try{const data=await getJSON('/api/world/map?'+q);if(rev!==revision)return;markers.clearLayers();for(const m of data.markers){const many=m.events>1;const cm=L.circleMarker([m.lat,m.lon],{radius:many?Math.min(19,8+Math.log2(m.events+1)*2):6,color:many?'#6d705b':'#b45f42',fillColor:many?'#78846b':'#c96a4b',fillOpacity:.72,weight:1.5}).addTo(markers);if(many){cm.bindTooltip(fmt(m.events)+' candidate events');cm.on('click',()=>map.setView([m.lat,m.lon],Math.min(map.getZoom()+3,12)))}else if(m.event){cm.bindTooltip('1 event · '+m.observations+' observation(s)');cm.on('click',()=>chooseEvent(m.event))}}$('mapLabel').textContent=fmt(data.visible_event_count)+' candidate events in view'+(data.display_clustering_enabled?' · display clustering at this zoom':' · individual events at this zoom')+(data.markers_limited?' · marker limit applied':'')}catch(e){if(rev===revision)message('Map: '+e.message,true)}}
+async function refresh(){if(loading)return;loading=true;$('refreshBtn').disabled=true;$('fusionState').textContent='AUTO · PROCESSING';message('Loading latest observations and automatically grouping candidate overlaps.');try{if(await loadSummary())await loadMap()}finally{loading=false;$('refreshBtn').disabled=false}}
+async function nearest(){if(!coords)return;try{const d=await getJSON(`/api/world/nearest?lat=${coords.lat}&lon=${coords.lon}`);if(!d.nearest){$('distance').textContent='No observations';$('distanceHint').textContent='No candidate events in the loaded window';return}$('distance').textContent=fmt(d.nearest.distance_km)+' km';$('distanceHint').textContent='Straight-line distance to the nearest candidate event; not fire spread or safety distance.'}catch(e){$('distanceHint').textContent=e.message}}
+function locate(){if(!navigator.geolocation){$('locationText').textContent='Geolocation unavailable';return}$('locationText').textContent='Requesting browser permission…';navigator.geolocation.getCurrentPosition(p=>{coords={lat:p.coords.latitude,lon:p.coords.longitude};$('locationText').textContent=coords.lat.toFixed(4)+', '+coords.lon.toFixed(4);person.clearLayers();L.circleMarker([coords.lat,coords.lon],{radius:8,color:'#2d6282',fillColor:'#78a6ba',fillOpacity:1}).addTo(person).bindPopup('Your location');map.setView([coords.lat,coords.lon],7);nearest()},e=>{$('locationText').textContent='Location unavailable: '+e.message},{timeout:15000,maximumAge:30000})}
+$('evidenceBtn').addEventListener('click', async () => {
+  if (!selected) return;
+  const eventId = selected.id;
+  $('evidenceBtn').disabled = true;
+  $('evidenceResults').textContent = 'Checking Sentinel-2 catalogue and Meteosat WMS…';
+  try {
+    const d = await getJSON(`/api/verification/event/${eventId}`);
+    if (!selected || selected.id !== eventId) return;
+    const a = d.sentinel2;
+    const m = d.meteosat;
+    const dates = a.acquisitions.map(x => `${x.acquired.slice(0,16).replace('T',' ')} UTC (${x.relative_to_latest_detection_hours}h from latest hotspot)`).join(' · ');
+    $('evidenceResults').textContent =
+      'Sentinel-2 catalogue: ' + (a.catalogue_reachable ? `${a.imagery_records} products found` : 'unavailable') + '. ' +
+      (dates ? 'Image acquisitions: ' + dates + '. ' : '') +
+      'Meteosat map service: ' + (m.map_service_reachable ? 'reachable' : 'unavailable') + '. ' +
+      'Independent duplicate verification: NOT PERFORMED. ' +
+      'Neither satellite source is being analysed for pixel-level matching.';
+  } catch (e) {
+    $('evidenceResults').textContent = 'Evidence check failed: ' + e.message;
+  } finally {
+    $('evidenceBtn').disabled = false;
+  }
+});
+$('sentinelBtn').addEventListener('click',async()=>{if(!selected)return;$('sentinelResults').textContent='Searching Sentinel-2 catalogue…';try{const d=await getJSON(`/api/sentinel2?lat=${selected.lat}&lon=${selected.lon}`);$('sentinelResults').textContent=`${d.count} catalogue records found. `+d.images.map(x=>`${x.acquired?.slice(0,10)||'unknown date'}: ${x.name}`).join(' · ')}catch(e){$('sentinelResults').textContent='Imagery search failed: '+e.message}});
+$('refreshBtn').addEventListener('click',refresh);$('locBtn').addEventListener('click',locate);$('worldBtn').addEventListener('click',()=>map.setView([15,0],2));map.on('moveend',loadMap);refresh();setInterval(refresh,300000);
+</script>
+<script>
+// Supporting evidence: show public Meteosat WMS visually; never count it as verification.
+let msgWMS = null;
+let msgHealth = null;
+async function setupMeteosatEvidence() {
+  try {
+    const r = await fetch('/api/verification/meteosat', {cache:'no-store'});
+    if (!r.ok) throw new Error('WMS status unavailable');
+    msgHealth = await r.json();
+    const status = document.getElementById('msgStatus');
+    const toggle = document.getElementById('msgOverlay');
+    status.textContent = msgHealth.reachable ? 'WMS AVAILABLE' : 'NOT AVAILABLE';
+    status.className = msgHealth.reachable ? 'tag ok' : 'tag';
+    if (msgHealth.reachable && msgHealth.wms_layer) {
+      toggle.disabled = false;
+      document.getElementById('msgEvidence').textContent =
+        'Meteosat MSG FRP map layer is available. It is a visual overlay, not automatic duplicate validation.';
+      msgWMS = L.tileLayer.wms(msgHealth.wms_url, {
+        layers: msgHealth.wms_layer,
+        format: 'image/png', transparent: true, opacity: 0.65,
+        version: '1.3.0', attribution: 'EUMETSAT / LSA SAF FRP-PIXEL'
+      });
+      toggle.addEventListener('change', () => {
+        if (toggle.checked) msgWMS.addTo(map);
+        else map.removeLayer(msgWMS);
+      });
+    } else {
+      document.getElementById('msgEvidence').textContent =
+        msgHealth.notice || 'Meteosat WMS is unavailable.';
+    }
+  } catch (e) {
+    document.getElementById('msgStatus').textContent = 'ERROR';
+    document.getElementById('msgEvidence').textContent = 'Meteosat check failed: ' + e.message;
+  }
+}
+// The base dashboard sets `selected` whenever an event marker is clicked.
+// This only adds evidence metadata; it does not change Fire Fusion's event count.
+const originalChooseEvent = chooseEvent;
+chooseEvent = function(event) {
+  originalChooseEvent(event);
+  const evidence = document.getElementById('verificationState');
+  evidence.textContent = 'Candidate ' + event.id + ': ' + event.count +
+    ' raw observations. Provisional pixel-footprint-aware matching with time and event-size safeguards. Ambiguous cases stay separate. Sentinel-2 imagery has not been analysed.';
+};
+setupMeteosatEvidence();
+</script>
+</body></html>

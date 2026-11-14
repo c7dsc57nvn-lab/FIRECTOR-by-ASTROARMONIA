@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: firector-astroarmonia
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn world_server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: NASA_FIRMS_KEY
+        sync: false
