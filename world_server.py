@@ -306,6 +306,10 @@ def load_world():
         fetched_row_count = len(observations)
         observations, exact_duplicate_rows = deduplicate_exact_records(observations)
         events = fuse_observations(observations)
+        try:
+            events, msg_stats = meteosat_merge(events)
+        except Exception as ex:
+            msg_stats = {'status': 'error_' + type(ex).__name__, 'checked': 0, 'fire_pixel_hits': 0, 'groups_merged': 0}
         counts = {source: sum(p['source'] == source for p in observations) for source in SOURCES}
         result = {'events': events, 'raw_count': len(observations), 'event_count': len(events),
                   'counts': counts, 'source_errors': errors,
@@ -319,9 +323,9 @@ def load_world():
                   'fusion_version': FUSION_VERSION,
                   'ambiguous_groups': sum(e['ambiguous'] for e in events),
                   'multisensor_groups': sum(e['source_agreement'] for e in events),
-                  'automatic_candidate_grouping': True,
+                  'automatic_candidate_grouping': True, 'meteosat_crosscheck': msg_stats,
                   'verified_duplicate_groups': 0,
-                  'supporting_imagery_used_in_merging': False,
+                  'supporting_imagery_used_in_merging': msg_stats['groups_merged'] > 0,
                   'operational_warning': 'Research prototype; not for emergency dispatch or safety decisions'}
         CACHE.update(time=time.monotonic(), result=result)
         record_audit(result)
@@ -457,6 +461,100 @@ def world_audit():
         return {'entries': [json.loads(line) for line in recent]}
     except (OSError, ValueError):
         return {'entries': []}
+
+
+
+# -------- Experimental fire-risk areas (heuristic, NOT an official danger index) --------
+# Combines recent satellite hotspot activity (VIIRS/MODIS, already in the feed) with
+# current weather from Open-Meteo (free, no key). It flags areas where fire is more
+# likely to start or spread; it is not validated and not the EFFIS/NFDRS index.
+OPEN_METEO = 'https://api.open-meteo.com/v1/forecast'
+RISK_CELL_DEG = 0.5
+RISK_MAX_CELLS = 120
+RISK_TTL = 1800
+_risk_cache = {'at': 0.0, 'result': None}
+_risk_lock = threading.Lock()
+
+
+def weather_points(points):
+    """Return one weather dict (or None) per (lat, lon); never raises."""
+    out = []
+    for i in range(0, len(points), 50):
+        chunk = points[i:i + 50]
+        try:
+            r = requests.get(OPEN_METEO, params={
+                'latitude': ','.join(f'{la:.3f}' for la, _ in chunk),
+                'longitude': ','.join(f'{lo:.3f}' for _, lo in chunk),
+                'current': 'temperature_2m,relative_humidity_2m,wind_speed_10m',
+                'daily': 'precipitation_sum', 'past_days': 3, 'forecast_days': 1,
+                'timezone': 'UTC'}, timeout=(10, 30))
+            r.raise_for_status()
+            data = r.json()
+            data = data if isinstance(data, list) else [data]
+            for d in data:
+                cur = d.get('current') or {}
+                rain = [x for x in (d.get('daily', {}).get('precipitation_sum') or [])[:3] if x is not None]
+                out.append({'temp_c': cur.get('temperature_2m'),
+                            'humidity_pct': cur.get('relative_humidity_2m'),
+                            'wind_kmh': cur.get('wind_speed_10m'),
+                            'rain_3d_mm': round(sum(rain), 1) if rain else None})
+            out.extend([None] * (len(chunk) - len(data)))
+        except (requests.RequestException, ValueError, AttributeError):
+            out.extend([None] * len(chunk))
+    return out
+
+
+def risk_level(observations, weather):
+    """Heuristic score: satellite activity (0-3) + weather dryness/heat/wind (0-11)."""
+    activity = 3 if observations >= 10 else 2 if observations >= 4 else 1
+    if not weather or any(weather.get(k) is None for k in ('temp_c', 'humidity_pct', 'wind_kmh')):
+        return ('elevated', activity) if observations >= 10 else (None, activity)
+    t, h, w = weather['temp_c'], weather['humidity_pct'], weather['wind_kmh']
+    rain = weather.get('rain_3d_mm')
+    score = activity
+    score += 3 if t >= 35 else 2 if t >= 30 else 1 if t >= 25 else 0
+    score += 3 if h <= 15 else 2 if h <= 25 else 1 if h <= 35 else 0
+    score += 3 if w >= 40 else 2 if w >= 25 else 1 if w >= 15 else 0
+    if rain is not None:
+        score += 2 if rain <= 0.1 else 1 if rain <= 2 else -2 if rain >= 10 else 0
+    level = 'very_high' if score >= 10 else 'high' if score >= 7 else 'elevated' if score >= 5 else None
+    return level, score
+
+
+def build_risk(events):
+    cells = {}
+    for e in events:
+        k = (math.floor(e['lat'] / RISK_CELL_DEG), math.floor(e['lon'] / RISK_CELL_DEG))
+        c = cells.setdefault(k, {'obs': 0, 'events': 0, 'la': 0.0, 'lo': 0.0})
+        c['obs'] += e['count']; c['events'] += 1
+        c['la'] += e['lat'] * e['count']; c['lo'] += e['lon'] * e['count']
+    top = sorted(cells.values(), key=lambda c: c['obs'], reverse=True)[:RISK_MAX_CELLS]
+    pts = [(c['la'] / c['obs'], c['lo'] / c['obs']) for c in top]
+    weather = weather_points(pts)
+    areas = []
+    for c, (la, lo), wx in zip(top, pts, weather):
+        level, score = risk_level(c['obs'], wx)
+        if level:
+            areas.append({'lat': round(la, 4), 'lon': round(lo, 4), 'level': level, 'score': score,
+                          'events': c['events'], 'observations': c['obs'], 'weather': wx,
+                          'weather_available': wx is not None})
+    return areas
+
+
+@app.get('/api/world/risk')
+def world_risk():
+    world = load_world()
+    with _risk_lock:
+        fresh = (_risk_cache['result'] is not None
+                 and time.monotonic() - _risk_cache['at'] < RISK_TTL)
+        if not fresh:
+            areas = build_risk(world['events'])
+            _risk_cache.update(at=time.monotonic(), result={
+                'areas': areas, 'computed_at': datetime.now(timezone.utc).isoformat(),
+                'basis': 'Recent VIIRS/MODIS hotspot activity + Open-Meteo weather (temperature, humidity, wind, 3-day rain)',
+                'validation_status': 'not_validated',
+                'warning': 'Experimental heuristic; not an official fire danger rating. Not for safety decisions.'})
+        return _risk_cache['result']
 
 
 # -------- Supporting imagery (not independent duplicate confirmation) --------
@@ -640,3 +738,152 @@ def fusion_diagnostics():
         'accuracy_estimate': None,
         'warning': 'Grouping reduces repeated markers provisionally. It may merge different fires or split the same fire.'
     }
+
+
+# -------- Meteosat cross-check: merge candidate groups that share ONE Meteosat fire pixel --------
+# Uses WMS GetFeatureInfo on the LSA SAF FRP-PIXEL layer at each group's latest time.
+# Conservative: groups merge only if both sit on a real fire pixel AND the response
+# identifies the same pixel. If the response has no pixel id, nothing is merged.
+MSG_MERGE_MAX_KM = 6.0
+MSG_QUERY_CAP = 200
+MSG_BUDGET_SECONDS = 20
+
+
+def _msg_feature(lat, lon, ts, layer):
+    d = 0.02
+    stamp = datetime.fromtimestamp(ts - ts % 900, timezone.utc).strftime('%Y-%m-%dT%H:%M:00Z')
+    r = requests.get(MSG_WMS, params={
+        'dataset': 'MSG-FRP', 'SERVICE': 'WMS', 'VERSION': '1.3.0', 'REQUEST': 'GetFeatureInfo',
+        'LAYERS': layer, 'QUERY_LAYERS': layer, 'CRS': 'EPSG:4326', 'TIME': stamp,
+        'BBOX': f'{lat-d},{lon-d},{lat+d},{lon+d}', 'WIDTH': 101, 'HEIGHT': 101, 'I': 50, 'J': 50,
+        'INFO_FORMAT': 'application/json'}, timeout=(5, 15))
+    r.raise_for_status()
+    return r.text
+
+
+def parse_msg_pixel(text):
+    """Return (frp, pixel_id) for a fire pixel, else None. pixel_id may be None."""
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return None
+    frp, pix = None, None
+    stack = [payload]
+    while stack:
+        o = stack.pop()
+        if isinstance(o, list):
+            stack.extend(o)
+        elif isinstance(o, dict):
+            if pix is None and all(isinstance(o.get(k), (int, float)) for k in ('x', 'y')):
+                pix = (round(o['x'], 4), round(o['y'], 4))
+            for k, v in o.items():
+                try:
+                    num = float(v)
+                except (TypeError, ValueError):
+                    num = None
+                if num is not None and frp is None and (k.lower() in ('value', 'data') or 'frp' in k.lower()) \
+                        and 0 < num < 1e5:
+                    frp = num
+                if isinstance(v, (dict, list)):
+                    stack.append(v)
+    return (frp, pix) if frp is not None else None
+
+
+def _merge_events(group):
+    n = sum(e['count'] for e in group)
+    x = y = z = 0.0
+    for e in group:
+        la, lo = math.radians(e['lat']), math.radians(e['lon'])
+        x += e['count'] * math.cos(la) * math.cos(lo)
+        y += e['count'] * math.cos(la) * math.sin(lo)
+        z += e['count'] * math.sin(la)
+    merged = dict(group[0])
+    merged.update(
+        lat=math.degrees(math.atan2(z, math.hypot(x, y))), lon=math.degrees(math.atan2(y, x)),
+        count=n, sources=sorted({s for e in group for s in e['sources']}),
+        latest=max(e['latest'] for e in group), oldest=min(e['oldest'] for e in group),
+        examples=[m for e in group for m in e['examples']][:8], candidate_match=True,
+        source_agreement=len({s for e in group for s in e['sources']}) > 1,
+        ambiguous=False, max_pairwise_separation_km=None, independent_confirmation=True,
+        independent_imagery_checked=True, meteosat_pixel_merged=True,
+        match_basis='viirs_modis_grouping_plus_shared_meteosat_fire_pixel',
+        fusion_note=f'Merged {len(group)} candidate groups sharing one Meteosat fire pixel (not field-verified)',
+        snapshot_group_id=hashlib.sha256('|'.join(sorted(e['snapshot_group_id'] for e in group)).encode()).hexdigest()[:16])
+    return merged
+
+
+def meteosat_merge(events):
+    stats = {'status': 'skipped', 'checked': 0, 'fire_pixel_hits': 0, 'groups_merged': 0}
+    status = meteosat_wms_status()
+    if not status.get('reachable') or not status.get('wms_layer'):
+        stats['status'] = 'meteosat_unavailable'
+        return events, stats
+    layer = status['wms_layer']
+    cells = {}
+    for i, e in enumerate(events):
+        if abs(e['lat']) <= 65 and abs(e['lon']) <= 65:
+            cells.setdefault((int(e['lat'] // 0.1), int(e['lon'] // 0.1)), []).append(i)
+    pairs, cand = [], set()
+    for (a, b), members in cells.items():
+        near = [j for da in (-1, 0, 1) for db in (-1, 0, 1) for j in cells.get((a + da, b + db), ())]
+        for i in members:
+            for j in near:
+                if i < j and distance_km(events[i], events[j]) <= MSG_MERGE_MAX_KM and \
+                        max(events[i]['latest'], events[j]['latest']) - min(events[i]['oldest'], events[j]['oldest']) <= 8 * 3600:
+                    pairs.append((i, j)); cand.update((i, j))
+    cand = sorted(cand, key=lambda i: -events[i]['count'])[:MSG_QUERY_CAP]
+    hits = {}
+
+    def probe(i):
+        e = events[i]
+        return i, parse_msg_pixel(_msg_feature(e['lat'], e['lon'], e['latest'], layer))
+
+    pool = ThreadPoolExecutor(max_workers=8)
+    futures = [pool.submit(probe, i) for i in cand]
+    try:
+        from concurrent.futures import as_completed
+        for f in as_completed(futures, timeout=MSG_BUDGET_SECONDS):
+            try:
+                i, px = f.result()
+                stats['checked'] += 1
+                if px:
+                    hits[i] = px
+            except Exception:
+                pass
+    except Exception:
+        stats['status'] = 'time_budget_reached'
+    pool.shutdown(wait=False, cancel_futures=True)
+    stats['fire_pixel_hits'] = len(hits)
+    parent = list(range(len(events)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    for i, j in pairs:
+        if i in hits and j in hits and hits[i][1] is not None and hits[i][1] == hits[j][1]:
+            parent[find(i)] = find(j)
+    groups = {}
+    for i in range(len(events)):
+        groups.setdefault(find(i), []).append(events[i])
+    merged = [_merge_events(g) if len(g) > 1 else g[0] for g in groups.values()]
+    for n, e in enumerate(merged, start=1):
+        e['id'] = n
+    stats['groups_merged'] = len(events) - len(merged)
+    if stats['status'] == 'skipped':
+        stats['status'] = ('ok' if not hits or any(p[1] is not None for p in hits.values())
+                           else 'pixel_id_not_in_response')
+    return merged, stats
+
+
+@app.get('/api/verification/meteosat/probe')
+def meteosat_probe(lat: float = Query(..., ge=-90, le=90), lon: float = Query(..., ge=-180, le=180)):
+    """Raw GetFeatureInfo output, to check the real response format of the Meteosat service."""
+    status = meteosat_wms_status()
+    if not status.get('wms_layer'):
+        raise HTTPException(status_code=502, detail='Meteosat WMS unavailable')
+    try:
+        raw = _msg_feature(lat, lon, int(time.time()) - 3600, status['wms_layer'])
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=type(exc).__name__)
+    return {'layer': status['wms_layer'], 'parsed': parse_msg_pixel(raw), 'raw': raw[:2000]}

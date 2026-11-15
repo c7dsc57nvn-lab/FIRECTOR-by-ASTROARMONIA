@@ -24,7 +24,7 @@ Free public satellite-observation research website, with worldwide NASA VIIRS/MO
 
 `pip install -r requirements.txt`
 
-`python -m unittest -v test_fusion_v6 test_validation`
+`python -m unittest -v test_fusion_v6 test_validation test_risk test_meteosat`
 
 `uvicorn world_server:app --port 9100`
 
