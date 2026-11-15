@@ -9,6 +9,11 @@ header{padding:17px 26px;background:var(--paper);border-bottom:1px solid var(--e
 .layout{display:grid;grid-template-columns:270px minmax(0,1fr) 255px;min-height:calc(100vh - 76px)}aside{background:var(--paper);padding:24px;border-right:1px solid var(--edge)}aside.right{border-left:1px solid var(--edge);border-right:none}main{padding:24px;min-width:0}h1{font-size:28px;letter-spacing:-.6px;margin:5px 0}h2{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin:26px 0 12px}.hint,.small{font-size:12px;color:var(--muted);line-height:1.6}.source{padding:12px 0;border-bottom:1px solid var(--edge);display:flex;justify-content:space-between;gap:8px}.source strong{font-size:14px}.tag{font-size:10px;background:#efeee8;padding:4px 7px;border-radius:4px;color:var(--muted)}.tag.ok{color:var(--olive);background:#e5eade}button{border:0;border-radius:7px;background:var(--olive);padding:12px;color:white;font:inherit;font-weight:650;cursor:pointer}button:disabled{opacity:.5;cursor:wait}.full{width:100%;margin-top:11px}.secondary{background:transparent;border:1px solid var(--edge);color:var(--ink)}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0}.metric,.map-box,.details{border:1px solid var(--edge);background:var(--paper);border-radius:11px}.metric{padding:15px}.metric small{display:block;color:var(--muted);font-size:11px}.metric strong{display:block;font-size:25px;margin-top:6px}.map-box{padding:10px}#map{height:65vh;min-height:460px;border-radius:7px;z-index:0}.mapbar{display:flex;justify-content:space-between;gap:12px;padding:6px 8px 12px;color:var(--muted);font-size:12px}.details{padding:15px;margin-top:14px}.details strong{display:block;margin-bottom:7px}.details p{font-size:12px;color:var(--muted);margin:5px 0}.status{font-size:12px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}.error{color:#a84231}.line{border-top:1px solid var(--edge);margin:17px 0}.data{font-variant-numeric:tabular-nums}.leaflet-popup-content{font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 @media(max-width:1150px){.layout{grid-template-columns:235px minmax(0,1fr)}aside.right{grid-column:1/-1;border-top:1px solid var(--edge)}}@media(max-width:700px){.layout{display:block}header{padding:13px}main{padding:14px}.metrics{grid-template-columns:repeat(2,1fr)}aside{padding:16px}#map{height:53vh;min-height:340px}}
 .byline{font-size:10px;font-weight:700;letter-spacing:2.2px;color:#536a54;margin-top:-2px;margin-bottom:4px;text-transform:uppercase}.sw{display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:650;margin-top:14px}.sw input{display:none}.sw i{position:relative;width:40px;height:22px;border-radius:12px;background:#cfcbbd;transition:.2s;flex:none}.sw i:after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}.sw input:checked+i{background:#c88a1c}.sw input:checked+i:after{left:21px}.risk-ic{width:20px;height:20px;transform:rotate(45deg);border:2px solid #fff;box-shadow:0 0 0 1.5px rgba(0,0,0,.35);border-radius:3px}.risk-ic.elevated{background:#e3b341}.risk-ic.high{background:#e27d1f}.risk-ic.very_high{background:#8a2b8f}.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-top:8px}.legend b{display:inline-block;width:10px;height:10px;transform:rotate(45deg);margin-right:5px;vertical-align:middle}
+
+/* Optional fire-weather heatmap: a weather screening layer, not thermal satellite imagery. */
+.heat-gradient{height:9px;max-width:235px;border-radius:6px;background:linear-gradient(90deg,#efcf73,#eb973d,#d3572c,#8c264b);margin:9px 0 4px}
+.heat-legend{display:flex;justify-content:space-between;font-size:10px;max-width:235px;color:var(--muted)}
+.heat-hint{font-size:11px;color:var(--muted);line-height:1.5}
 </style></head><body>
 <header><div><div class="brand"><b>FIRE</b>CTOR</div><div class="byline">by ASTROARMONIA</div><div class="eyebrow">Worldwide fire observation network</div></div><div class="pill" id="headerStatus">SATELLITE OBSERVATIONS</div></header>
 <div class="layout"><aside><div class="eyebrow">Data Sources</div>
@@ -19,6 +24,11 @@ header{padding:17px 26px;background:var(--paper);border-bottom:1px solid var(--e
 <h2>Data Control</h2><button class="full" id="refreshBtn">Refresh observations</button><button class="secondary full" id="locBtn">Use my location</button><button class="secondary full" id="worldBtn">View whole world</button>
 <p class="hint">FIRECTOR checks for updated NASA data every 5 minutes. Satellite observations may arrive hours after acquisition.</p>
 <h2>Fire risk areas</h2><label class="sw"><input type="checkbox" id="riskToggle"><i></i>Show high-risk areas</label><div class="legend"><span><b style="background:#e3b341"></b>Elevated</span><span><b style="background:#e27d1f"></b>High</span><span><b style="background:#8a2b8f"></b>Very high</span></div><p class="hint" id="riskStatus">Off. Diamonds mark areas with recent satellite hotspots plus hot, dry or windy weather. Experimental, not an official rating.</p>
+<h2>Fire-weather heatmap</h2>
+<label class="sw"><input type="checkbox" id="weatherHeatToggle"><i></i>Thermal-style weather overlay</label>
+<div class="heat-gradient" aria-hidden="true"></div><div class="heat-legend"><span>Elevated</span><span>High</span><span>Very high</span></div>
+<p class="hint" id="weatherHeatStatus" role="status">Off. Turn on to see areas with hot, dry and windy conditions. Zoom in first.</p>
+<p class="heat-hint">Illustrative weather conditions, not satellite surface temperatures, confirmed fire locations, or the probability of a new fire. No color does not mean an area is safe. Weather: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>.</p>
 <h2>Data quality</h2><div class="status" id="qualityStatus">Not evaluated</div><h2>Source Status</h2><div class="status" id="status">Preparing first request…</div>
 <h2>Fire Fusion v6 <span class="tag ok" id="fusionState">AUTO · STARTING</span></h2><p class="hint">Automatic candidate grouping starts when the dashboard opens and re-runs after each successful NASA refresh. Fusion uses reported NASA pixel dimensions and observation times, with a capped group diameter and safeguards against chaining separate hotspots. Ambiguous observations remain separate. Meteosat fire pixels are used to merge groups that sit on the same Meteosat pixel (where covered). Sentinel-2 is review-only and does not merge anything. Event counts are not confirmed fire counts.</p>
 <h2>Independent imagery review</h2><p class="hint">Meteosat merges only groups sharing one fire pixel, in its coverage area. Sentinel-2 catalogue records cannot prove duplicates.</p><label class="hint"><input id="msgOverlay" type="checkbox" disabled> Show Meteosat FRP overlay (visual)</label><p class="small"><a href="https://lsa-saf.eumetsat.int/en/data/map-service/" target="_blank" rel="noopener noreferrer">Official Meteosat fire map</a></p>
@@ -29,6 +39,7 @@ header{padding:17px 26px;background:var(--paper);border-bottom:1px solid var(--e
 <div class="details"><strong id="detailTitle">Select a fire event</strong><p id="detailBody">Click a marker to inspect its contributing VIIRS and MODIS observations.</p><button class="secondary" id="sentinelBtn" disabled>Find Sentinel-2 imagery</button><div id="sentinelResults" class="small"></div><div class="line"></div><strong>Verification evidence</strong><p class="small">Inspect whether supporting data are available and recent enough to be useful. This is not an automatic duplicate confirmation.</p><button class="secondary" id="evidenceBtn" disabled>Check Sentinel-2 + Meteosat evidence</button><div id="evidenceResults" class="small" role="status" aria-live="polite"></div><p class="small" id="verificationState">Select an event to inspect supporting sources.</p><p class="small" id="msgEvidence">Meteosat WMS status is being checked.</p><p class="small"><b>Decision:</b> unverified candidate grouping. No automatic independent verification is implemented.</p></div>
 </main><aside class="right"><div class="eyebrow">Location Intelligence</div><h2>Your position</h2><div id="locationText" class="small">Location not shared</div><h2>Closest detected hotspot</h2><div id="distance" style="font-size:27px;font-weight:750">—</div><p class="hint" id="distanceHint">Allow location access to calculate the distance to the nearest candidate event in the last 24 hours.</p><div class="line"></div><h2>Feed health / audit</h2><div class="small" id="auditInfo">Awaiting first retrieval</div><h2>Latest refresh</h2><div class="small" id="retrieved">Not loaded</div><h2>Coverage</h2><p class="hint">Worldwide, rolling 24-hour window. Zooming out groups markers visually; zoom to level 11+ to see individual candidate events. Grouped map circles are not additional fire events.</p><p class="hint">Never use this prototype to decide whether an area is safe. Consult official emergency authorities.</p></aside></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <script>
 const $=id=>document.getElementById(id);
 const map=L.map('map',{worldCopyJump:true}).setView([15,0],2);
@@ -142,5 +153,68 @@ async function loadRisk(){
   }catch(e){$('riskStatus').textContent='Risk layer unavailable: '+e.message}
 }
 $('riskToggle').addEventListener('change',loadRisk);
+</script>
+<script>
+// Fire-weather potential: optional thermal-style *weather* shading.
+// Source: Open-Meteo current temperature/humidity/wind and 3-day rain.
+// This layer is independent of the NASA thermal-detection feed.
+const weatherHeatToggle = $('weatherHeatToggle');
+let weatherHeatLayer = null;
+let weatherHeatRequest = 0;
+let weatherHeatTimer = null;
+const weatherHeatPane = map.createPane('firectorWeatherHeat');
+weatherHeatPane.style.zIndex = 390; // Keep VIIRS/MODIS event markers visible on top.
+weatherHeatPane.style.pointerEvents = 'none';
+function removeWeatherHeat() {
+  ++weatherHeatRequest;
+  if(weatherHeatLayer){map.removeLayer(weatherHeatLayer);weatherHeatLayer = null;}
+}
+async function loadWeatherHeat() {
+  const rev = ++weatherHeatRequest;
+  if (!weatherHeatToggle.checked) {removeWeatherHeat();$('weatherHeatStatus').textContent='Off.';return;}
+  if(map.getZoom()<5){
+    removeWeatherHeat();
+    $('weatherHeatStatus').textContent='Zoom in to level 5 or higher to see the weather overlay.';
+    return;
+  }
+  if(!L.heatLayer){
+    $('weatherHeatStatus').textContent='Heatmap library unavailable. Check your internet connection.';
+    return;
+  }
+  const b=map.getBounds();
+  const q=new URLSearchParams({west:Math.max(-180,b.getWest()).toFixed(3),
+    south:Math.max(-85,b.getSouth()).toFixed(3),
+    east:Math.min(180,b.getEast()).toFixed(3),
+    north:Math.min(85,b.getNorth()).toFixed(3),
+    zoom:map.getZoom().toFixed(0)});
+  $('weatherHeatStatus').textContent='Checking weather across the visible map…';
+  try{
+    const d=await getJSON('/api/world/weather-heat?'+q);
+    if(rev!==weatherHeatRequest || !weatherHeatToggle.checked)return;
+    if(weatherHeatLayer){map.removeLayer(weatherHeatLayer);weatherHeatLayer=null;}
+    if(d.status!=='ok'){
+      $('weatherHeatStatus').textContent=d.notice||'Weather conditions unavailable.';
+      return;
+    }
+    const pts=d.areas.map(a=>[a.lat,a.lon,a.intensity]);
+    if(pts.length){
+      weatherHeatLayer=L.heatLayer(pts,{pane:'firectorWeatherHeat',radius:48,blur:38,
+        minOpacity:0.12,max:1,maxZoom:11,
+        gradient:{0.25:'#efcf73',0.46:'#eb973d',0.72:'#d3572c',1.0:'#8c264b'}}).addTo(map);
+    }
+    $('weatherHeatStatus').textContent=`${d.areas.length} weather-screen locations highlighted from ${d.weather_available_points} available samples. Experimental only; not predicted fire starts.`;
+  }catch(e){
+    if(rev===weatherHeatRequest) $('weatherHeatStatus').textContent='Weather overlay unavailable: '+e.message;
+  }
+}
+weatherHeatToggle.addEventListener('change',()=>{
+  if(!weatherHeatToggle.checked){removeWeatherHeat();$('weatherHeatStatus').textContent='Off.';}
+  else loadWeatherHeat();
+});
+map.on('moveend',()=>{
+  if(!weatherHeatToggle.checked)return;
+  clearTimeout(weatherHeatTimer);
+  weatherHeatTimer=setTimeout(loadWeatherHeat,650);
+});
 </script>
 </body></html>
