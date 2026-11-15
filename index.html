@@ -26,8 +26,8 @@ header{padding:17px 26px;background:var(--paper);border-bottom:1px solid var(--e
 <h2>Burned Earth</h2>
 <label class="sw"><input type="checkbox" id="burnedEarthToggle"><i></i>Show burned areas</label>
 <p class="hint" id="burnedEarthStatus" role="status" aria-live="polite">Off. Show satellite-derived estimated burned-area perimeters from the past 30 days.</p>
-<p class="burn-info burn-note">Copernicus GWIS · worldwide, approximate burned-area mapping over the last 30 days. These are <b>preliminary estimated perimeters</b> derived from MODIS/VIIRS, not live thermal imagery or confirmed fire boundaries. Coverage and display vary with map zoom; some fires may be absent.</p>
-<p class="burn-info"><a href="https://gwis.jrc.ec.europa.eu/" target="_blank" rel="noopener noreferrer">About GWIS burned-area data</a></p>
+<p class="burn-info burn-note">Copernicus GWIS · worldwide, preliminary mapping for the last 30 days. These are <b>preliminary estimated perimeters</b> derived from MODIS/VIIRS, not live thermal imagery or confirmed fire boundaries. Coverage and display vary with map zoom; some fires may be absent.</p>
+<p class="burn-info"><a href="https://gwis.jrc.ec.europa.eu/apps/gwis_current_situation/" target="_blank" rel="noopener noreferrer">Open official GWIS burned-area viewer</a></p>
 <h2>Data quality</h2><div class="status" id="qualityStatus">Not evaluated</div><h2>Source Status</h2><div class="status" id="status">Preparing first request…</div>
 <h2>Fire Fusion v6 <span class="tag ok" id="fusionState">AUTO · STARTING</span></h2><p class="hint">Automatic candidate grouping starts when the dashboard opens and re-runs after each successful NASA refresh. Fusion uses reported NASA pixel dimensions and observation times, with a capped group diameter and safeguards against chaining separate hotspots. Ambiguous observations remain separate. Meteosat fire pixels are used to merge groups that sit on the same Meteosat pixel (where covered). Sentinel-2 is review-only and does not merge anything. Event counts are not confirmed fire counts.</p>
 <h2>Independent imagery review</h2><p class="hint">Meteosat merges only groups sharing one fire pixel, in its coverage area. Sentinel-2 catalogue records cannot prove duplicates.</p><label class="hint"><input id="msgOverlay" type="checkbox" disabled> Show Meteosat FRP overlay (visual)</label><p class="small"><a href="https://lsa-saf.eumetsat.int/en/data/map-service/" target="_blank" rel="noopener noreferrer">Official Meteosat fire map</a></p>
@@ -155,54 +155,111 @@ async function loadRisk(){
 $('riskToggle').addEventListener('change',loadRisk);
 </script>
 <script>
-// Burned Earth: Copernicus JRC Global Wildfire Information System (GWIS).
-// The NRT burned-area layer estimates *already affected* land from satellite
-// observations; it does NOT predict future fires or verify each boundary.
-// WMS layer names follow the official GWIS catalogue (nrt.ba.month).
-// No NASA key, third-party JS library, or proxy is needed.
+// Burned Earth: GWIS near-real-time estimated burned areas (last 30 days).
+// Active VIIRS/MODIS hotspot markers and Fire Fusion are NOT changed by this layer.
+// GWIS has two public WMS addresses. The Copernicus map service is tried first;
+// if its tiles all fail, the older JRC service is attempted once as a fallback.
+// No keys or new dependencies are required for these public WMS overlays.
 const burnedEarthToggle = $('burnedEarthToggle');
 const burnedEarthStatus = $('burnedEarthStatus');
 const burnedPane = map.createPane('burnedEarthPane');
-burnedPane.style.zIndex = 370; // Above base map, below hotspot markers.
+burnedPane.style.zIndex = 370;
 burnedPane.style.pointerEvents = 'none';
-const burnedAreaWMS = L.tileLayer.wms('https://ies-ows.jrc.ec.europa.eu/gwis', {
-  layers: 'nrt.ba.month',
-  styles: '', // MapServer requires STYLES even when the default is used.
-  format: 'image/png',
-  transparent: true,
-  version: '1.1.1', // Uses familiar SRS/BBOX order for EPSG:3857.
-  opacity: 0.82,
-  pane: 'burnedEarthPane',
-  updateWhenIdle: true,
-  keepBuffer: 1,
-  attribution: 'Burned areas: European Commission JRC / Copernicus GWIS'
-});
-let burnedTileLoads = 0;
-let burnedTileErrors = 0;
-function updateBurnedStatus(){
-  if(!burnedEarthToggle.checked)return;
-  if(burnedTileLoads === 0 && burnedTileErrors === 0){
-    burnedEarthStatus.textContent = 'Requesting GWIS burned-area imagery. Tiles may take 15–30 seconds to appear.';
-  } else if(burnedTileLoads === 0 && burnedTileErrors > 0){
-    burnedEarthStatus.textContent = 'Burned-area service could not load map tiles. Try again later or view the GWIS source.';
-  } else if(burnedTileErrors > 0){
-    burnedEarthStatus.textContent = 'Burned-area imagery partially loaded; some tiles failed. Move or zoom the map to retry.';
-  } else {
-    burnedEarthStatus.textContent = 'GWIS map imagery loaded. Colored shapes mark estimated burns in the past 30 days where the data source has coverage. Blank map areas are not proof of no fire.';
-  }
+const burnSources = [
+  {name:'Copernicus', url:'https://maps.effis.emergency.copernicus.eu/gwis'},
+  {name:'JRC backup', url:'https://ies-ows.jrc.ec.europa.eu/gwis'}
+];
+let burnLayer = null;
+let burnSourceIndex = 0;
+let burnTileLoads = 0;
+let burnTileErrors = 0;
+let burnLoadTimer = null;
+let burnAttempt = 0;
+function burnMessage(message){
+  burnedEarthStatus.textContent = message;
 }
-burnedAreaWMS.on('tileload', ()=>{burnedTileLoads++;updateBurnedStatus()});
-burnedAreaWMS.on('tileerror', ()=>{burnedTileErrors++;updateBurnedStatus()});
+function clearBurnTimer(){
+  if(burnLoadTimer !== null){clearTimeout(burnLoadTimer);burnLoadTimer=null;}
+}
+function burnZoomHint(){
+  return map.getZoom() < 9 ? ' Zoom to level 9 or closer to inspect small perimeters.' : '';
+}
+function showBurnFailure(){
+  clearBurnTimer();
+  burnMessage('Burned-area tiles could not be loaded from either GWIS map service. This is a provider/network problem, not a missing NASA key. Check the official GWIS viewer below.');
+}
+function tryNextBurnSource(){
+  if(!burnedEarthToggle.checked) return;
+  clearBurnTimer();
+  if(burnSourceIndex + 1 >= burnSources.length){showBurnFailure();return;}
+  burnSourceIndex += 1;
+  addBurnSource();
+}
+function addBurnSource(){
+  if(!burnedEarthToggle.checked)return;
+  const attempt = ++burnAttempt;
+  clearBurnTimer();
+  if(burnLayer){map.removeLayer(burnLayer);burnLayer=null;}
+  burnTileLoads=0;
+  burnTileErrors=0;
+  const source = burnSources[burnSourceIndex];
+  burnMessage('Loading 30-day GWIS burned-area imagery from '+source.name+'… Large map tiles may be slow.'+burnZoomHint());
+  const layer = L.tileLayer.wms(source.url, {
+    layers:'nrt.ba.month',
+    styles:'', // Required in MapServer GetMap requests
+    format:'image/png', transparent:true, version:'1.1.1',
+    opacity:0.82, pane:'burnedEarthPane',
+    updateWhenIdle:true, keepBuffer:1,
+    attribution:'Burned areas: European Commission JRC / Copernicus GWIS'
+  });
+  burnLayer=layer;
+  const isCurrent=()=>burnedEarthToggle.checked && burnLayer===layer && burnAttempt===attempt;
+  layer.on('tileload',()=>{
+    if(!isCurrent())return;
+    burnTileLoads++;
+    clearBurnTimer();
+    burnMessage('GWIS map tiles loaded from '+source.name+'. Outlines appear only where burns are mapped in the last 30 days; a blank area is not proof of no fire.'+burnZoomHint());
+  });
+  layer.on('tileerror',()=>{
+    if(!isCurrent())return;
+    burnTileErrors++;
+    // Wait for the whole initial batch, rather than treating one cancelled tile
+    // after a zoom/pan as proof that the service failed.
+    if(burnTileLoads > 0){
+      burnMessage('GWIS map is partially loaded from '+source.name+'. Some tiles failed; hold the map still or zoom to retry.'+burnZoomHint());
+    }
+  });
+  layer.on('load',()=>{
+    if(!isCurrent())return;
+    if(burnTileLoads===0 && burnTileErrors>0){
+      tryNextBurnSource();
+    }
+  });
+  layer.addTo(map);
+  // A slow or stalled provider can produce neither tileload nor tileerror.
+  // Avoid leaving the UI indefinitely at “Loading…”.
+  burnLoadTimer=setTimeout(()=>{
+    if(!isCurrent())return;
+    if(burnTileLoads===0)tryNextBurnSource();
+    else burnMessage('GWIS responded, but some tiles remain slow.'+burnZoomHint());
+  },45000);
+}
 burnedEarthToggle.addEventListener('change',()=>{
   if(!burnedEarthToggle.checked){
-    map.removeLayer(burnedAreaWMS);
-    burnedEarthStatus.textContent = 'Off.';
+    ++burnAttempt;
+    clearBurnTimer();
+    if(burnLayer){map.removeLayer(burnLayer);burnLayer=null;}
+    burnMessage('Off.');
     return;
   }
-  burnedTileLoads = 0;
-  burnedTileErrors = 0;
-  updateBurnedStatus();
-  burnedAreaWMS.addTo(map);
+  burnSourceIndex=0;
+  addBurnSource();
+});
+map.on('zoomend',()=>{
+  if(burnedEarthToggle.checked && burnTileLoads>0){
+    const source=burnSources[burnSourceIndex];
+    burnMessage('GWIS imagery enabled ('+source.name+'). Burned areas are estimated, not confirmed fire perimeters.'+burnZoomHint());
+  }
 });
 </script>
 </body></html>
